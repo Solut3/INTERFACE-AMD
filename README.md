@@ -23,3 +23,50 @@ Um utilitário gráfico para monitorar e controlar sua GPU (NVIDIA ou AMD) no Po
    ```bash
    sudo apt install ./v1.0.2.deb
    ```
+
+## Windows (execução)
+
+- **Requisitos**:
+  - Python 3 instalado (`python` no PATH)
+  - Para NVIDIA: `nvidia-smi` disponível no PATH (normalmente vem com o driver)
+  - **AMD no Windows**: ainda não suportado (o projeto usa sysfs do Linux para AMD)
+
+- **Como rodar** (PowerShell):
+
+```powershell
+.\run.ps1
+```
+
+- **Alternativa** (duplo clique):
+  - Execute `run.bat`
+
+## Observações de compatibilidade
+
+- No Windows, o app consegue **monitorar NVIDIA** via `nvidia-smi` (uso/temperatura/memória).
+- Funções que dependem de `nvidia-settings`, `sudo`, `pkexec`, `systemd` e `/sys` são específicas de Linux.
+- **AMD no Windows (monitoramento)**: para mostrar uso/temperatura/VRAM, instale e execute o **LibreHardwareMonitor** e habilite a exposição de sensores (WMI/CIM).
+  - Depois, reabra o app. Se o LibreHardwareMonitor estiver rodando, os campos deixam de aparecer como `N/A`.
+
+## Build (gerar executável)
+
+- **Windows**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_windows.ps1
+```
+
+Saída em `dist\INTERFACE-AMD\`.
+
+- **Linux**:
+
+```bash
+chmod +x ./build_linux.sh
+./build_linux.sh
+```
+
+Saída em `dist/interface-amd/`.
+
+## Dados do usuário (config/perfis)
+
+- **Windows**: `%APPDATA%\INTERFACE-AMD\` (config e `profiles.json`)
+- **Linux**: `~/.config/INTERFACE-AMD/`

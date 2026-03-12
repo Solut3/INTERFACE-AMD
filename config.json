@@ -1,8 +1,10 @@
 {
-    "fan_speed": 40,
+    "window_geometry": "450x800+549+124",
+    "active_tab": 0,
+    "fan_speed": 39,
     "core_clock_offset": 0,
     "mem_clock_offset": 0,
     "alert_sound_path": "alert.wav",
     "start_minimized": true,
-    "power_limit": 100
+    "power_limit": 0
 }

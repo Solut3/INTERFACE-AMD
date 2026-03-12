@@ -1,6 +1,7 @@
 import subprocess
 import logging
 import os
+import platform
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -8,8 +9,9 @@ IS_AUTHENTICATED = False
 
 def run_command(command):
     global IS_AUTHENTICATED
+    is_windows = platform.system().lower() == "windows"
 
-    if 'sudo' in command and not IS_AUTHENTICATED:
+    if not is_windows and 'sudo' in command and not IS_AUTHENTICATED:
         try:
             logging.info("Solicitando privilégios de root pela primeira vez...")
             subprocess.run('pkexec --user root whoami', shell=True, check=True, capture_output=True)
@@ -30,5 +32,6 @@ def run_command(command):
         )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
-        logging.error(f"Erro ao executar comando: {command}\nErro: {e.stderr.strip()}")
+        stderr = (e.stderr or "").strip()
+        logging.error(f"Erro ao executar comando: {command}\nErro: {stderr}")
         return None

@@ -13,12 +13,15 @@ from collections import deque
 import threading
 from PIL import Image, ImageTk
 import pystray
+import platform
+import subprocess
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from hardware_controller import HardwareManager
 from profile_manager import ProfileManager
+from app_paths import resource_path, config_path
 
 class App(tk.Tk):
     __version__ = "1.0.0"
@@ -31,24 +34,45 @@ class App(tk.Tk):
         sv_ttk.set_theme("dark")
         self.attributes('-alpha', 0.0)
         
-        self.title("Pop!_OS Hardware Controller")
+        self.title("Hardware Controller")
 
         try:
-            icon_image = ImageTk.PhotoImage(file="icon.png")
+            icon_path = resource_path("icon.png")
+            icon_image = ImageTk.PhotoImage(file=icon_path)
             self.iconphoto(True, icon_image)
         except tk.TclError:
             print("Aviso: Arquivo 'icon.png' não encontrado ou corrompido. Usando ícone padrão.")
             pass
 
         self.manager = HardwareManager()
+        self.limited_mode = bool(getattr(self.manager.controller, "is_limited", False))
         if not self.manager.controller:
-            messagebox.showerror("Erro", "Nenhum hardware compatível encontrado. O programa será fechado.")
-            self.destroy()
-            return
+            self.limited_mode = True
+            os_name = platform.system()
+            messagebox.showwarning(
+                "Modo limitado",
+                "Nenhum backend de controle foi encontrado para sua GPU nesta plataforma.\n\n"
+                f"Sistema detectado: {os_name}\n"
+                "- NVIDIA: requer 'nvidia-smi' disponível no PATH\n"
+                "- AMD no Windows: modo limitado (sem controle de fan/power/clock)\n\n"
+                "A interface será aberta, mas os controles ficarão desabilitados."
+            )
+        elif self.limited_mode:
+            os_name = platform.system()
+            messagebox.showwarning(
+                "Modo limitado",
+                "Sua GPU foi detectada, mas o backend de controle não está disponível nesta plataforma.\n\n"
+                f"Sistema detectado: {os_name}\n"
+                "A interface será aberta, mas os controles ficarão desabilitados."
+            )
 
-        self.profile_manager = ProfileManager()
-        self.min_power, self.max_power = self.manager.controller.get_power_limit_range()
-        self.config_file = "config.json"
+        profiles_path = config_path("profiles.json")
+        self.profile_manager = ProfileManager(profiles_file=profiles_path)
+        if self.manager.controller:
+            self.min_power, self.max_power = self.manager.controller.get_power_limit_range()
+        else:
+            self.min_power, self.max_power = None, None
+        self.config_file = config_path("config.json")
         self.settings = self.load_settings()
 
         saved_geometry = self.settings.get("window_geometry")
@@ -67,10 +91,13 @@ class App(tk.Tk):
         self.critical_alert_played = False
 
         self.start_minimized_var = tk.BooleanVar(value=self.settings.get("start_minimized", False))
-        self.alert_sound_path = tk.StringVar(value=self.settings.get("alert_sound_path", "alert.wav"))
+        default_alert = resource_path("alert.wav")
+        self.alert_sound_path = tk.StringVar(value=self.settings.get("alert_sound_path", default_alert))
         self.current_profile_name = tk.StringVar(value="Padrão")
         
         self.create_widgets()
+        if self.limited_mode:
+            self._disable_controls_for_limited_mode()
         self.update_ui_from_settings()
         self.update_stats()
         self.start_log_monitor()
@@ -89,6 +116,21 @@ class App(tk.Tk):
             self.notebook.select(saved_tab_index)
 
         self._fade_in_animation(self)
+
+    def _disable_controls_for_limited_mode(self):
+        try:
+            self.fan_scale.config(state="disabled")
+            self.core_clock_entry.config(state="disabled")
+            self.mem_clock_entry.config(state="disabled")
+            self.power_scale.config(state="disabled")
+            if hasattr(self, "apply_button"):
+                self.apply_button.config(state="disabled")
+            if hasattr(self, "save_button"):
+                self.save_button.config(state="disabled")
+            if hasattr(self, "reset_button"):
+                self.reset_button.config(state="disabled")
+        except Exception:
+            pass
 
 
     def create_widgets(self):
@@ -193,12 +235,12 @@ class App(tk.Tk):
 
         button_frame = ttk.Frame(top_level_frame)
         button_frame.pack(pady=20, fill="x", side="bottom")
-        reset_button = ttk.Button(button_frame, text="Restaurar Padrão", command=self.reset_to_defaults)
-        reset_button.pack(side="left", expand=True, padx=5)
-        apply_button = ttk.Button(button_frame, text="Aplicar", command=self.apply_settings)
-        apply_button.pack(side="left", expand=True, padx=5)
-        save_button = ttk.Button(button_frame, text="Salvar e Aplicar", command=self.save_and_apply)
-        save_button.pack(side="left", expand=True, padx=5)
+        self.reset_button = ttk.Button(button_frame, text="Restaurar Padrão", command=self.reset_to_defaults)
+        self.reset_button.pack(side="left", expand=True, padx=5)
+        self.apply_button = ttk.Button(button_frame, text="Aplicar", command=self.apply_settings)
+        self.apply_button.pack(side="left", expand=True, padx=5)
+        self.save_button = ttk.Button(button_frame, text="Salvar e Aplicar", command=self.save_and_apply)
+        self.save_button.pack(side="left", expand=True, padx=5)
 
         self.create_graph_widget(top_level_frame)
 
@@ -211,6 +253,13 @@ class App(tk.Tk):
         self.power_value_label.config(text=f"{val}W")
 
     def apply_settings(self):
+        if self.limited_mode or not self.manager.controller:
+            messagebox.showwarning(
+                "Indisponível",
+                "Controle de ventoinha/energia/clock não está disponível nesta plataforma/GPU no momento.\n"
+                "No Windows com AMD, este app abre em modo limitado."
+            )
+            return
         try:
             fan_speed = int(self.fan_scale.get())
             core_offset = int(self.core_clock_entry.get() or 0)
@@ -241,11 +290,24 @@ class App(tk.Tk):
         }
         with open(self.config_file, 'w') as f:
             json.dump(self.settings, f, indent=4)
-        
+
+        if self.limited_mode or not self.manager.controller:
+            messagebox.showinfo(
+                "Salvo",
+                "Configurações salvas no arquivo, mas não foram aplicadas porque o app está em modo limitado no Windows."
+            )
+            return
+
         self.apply_settings()
 
     def reset_to_defaults(self):
         if messagebox.askyesno("Confirmar", "Tem certeza que deseja restaurar as configurações de fábrica?"):
+            if self.limited_mode or not self.manager.controller:
+                messagebox.showwarning(
+                    "Indisponível",
+                    "Não é possível restaurar/aplicar configurações no modo limitado (Windows + AMD)."
+                )
+                return
             try:
                 self.manager.controller.reset_settings()
                 self.fan_scale.set(40)
@@ -331,13 +393,16 @@ class App(tk.Tk):
         self.on_fan_change(self.fan_scale.get())
         self.core_clock_entry.insert(0, str(self.settings.get("core_clock_offset", 0)))
         self.mem_clock_entry.insert(0, str(self.settings.get("mem_clock_offset", 0)))
-        self.alert_sound_path.set(self.settings.get("alert_sound_path", "alert.wav"))
+        default_alert = resource_path("alert.wav")
+        self.alert_sound_path.set(self.settings.get("alert_sound_path", default_alert))
         self.start_minimized_var.set(self.settings.get("start_minimized", False))
 
         if self.power_scale["state"] != "disabled":
-            self.power_scale.set(self.settings.get("power_limit", self.max_power))
+            value = self.settings.get("power_limit", self.max_power)
+            if value is not None:
+                self.power_scale.set(float(value))
             self.on_power_change(self.power_scale.get())
-        
+
         profile_names = self.profile_manager.get_profile_names()
         if profile_names:
             self.profile_combobox.set(profile_names[0])
@@ -373,7 +438,11 @@ class App(tk.Tk):
     def play_alert_sound(self):
         sound_path = self.alert_sound_path.get()
         try:
-            subprocess.Popen(["paplay", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if platform.system().lower() == "windows":
+                import winsound
+                winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            else:
+                subprocess.Popen(["paplay", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except FileNotFoundError:
             print(f"Comando 'paplay' não encontrado. Não foi possível tocar o som de alerta.")
         except Exception as e:
@@ -437,7 +506,7 @@ class App(tk.Tk):
 
     def setup_tray_icon(self):
         try:
-            image = Image.open("icon.png")
+            image = Image.open(resource_path("icon.png"))
         except FileNotFoundError:
             print("Erro: 'icon.png' não encontrado. Crie um ícone para a bandeja do sistema.")
             return
